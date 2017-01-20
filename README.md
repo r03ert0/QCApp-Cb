@@ -3,7 +3,6 @@ Fast visual quality control tool for cerebellum structures volumetry from FreeSu
 
 The application does not rely on any external library or package (good for people without matlab...). The interface looks like this:
 
-[[Insert Screen shot 2012-01-23 at 18.08.00.png]]
 ![Screenshot](/images/QCAPP.png)
 
 How to use it:
