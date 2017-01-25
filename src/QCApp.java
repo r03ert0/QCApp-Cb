@@ -15,6 +15,8 @@ import java.io.*;
 import java.nio.*;
 import javax.imageio.*;
 
+import java.nio.charset.*;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Vector;
@@ -30,7 +32,7 @@ class MyVolume {
 	final static short DT_INT32 = 8;
 	final static short DT_FLOAT32 = 16;
 
-	byte[] volume; // 3d volume data
+	int[][][] volume; // 3d volume data
 	int[] dim = new int[3]; // 3d volume dimensions (1st:dim[1])
 	float[] pixdim = new float[3]; // 3d volume pixel dimensions
 	short datatype; // 3d volume data type
@@ -65,6 +67,7 @@ class MyVolume {
 		final int MGHINT = 1;
 		final int MGHFLOAT = 3;
 		final int MGHSHORT = 4;
+		byte[] buffer;
 
 		try {
 			// Read volume data
@@ -118,49 +121,78 @@ class MyVolume {
 			S[2][1] = bb.getFloat(70);
 			S[2][2] = bb.getFloat(74);
 
+			System.out.println("Allocating " + dim[0] * dim[1] * dim[2] * bytesPerVoxel() + " bytes");
+			buffer = new byte[dim[0] * dim[1] * dim[2] * bytesPerVoxel()];
 			try {
-				System.out.println("Allocating " + dim[0] * dim[1] * dim[2] * bytesPerVoxel() + " bytes");
-				volume = new byte[dim[0] * dim[1] * dim[2] * bytesPerVoxel()];
+				dis.readFully(buffer, 0, buffer.length);
+				dis.close();
 			} catch (Exception e) {
 				e.printStackTrace();
-			} catch (OutOfMemoryError e) {
-				e.printStackTrace();
 			}
-			dis.readFully(volume, 0, volume.length);
-
-			dis.close();
+			
+			bb = ByteBuffer.wrap(buffer);
+			bb.order(BYTE_ORDER);
+			volume = new int[dim[0]][dim[1]][dim[2]];
+			for (int k = 0; k < dim[2]; k += 1)
+				for (int j = 0; j < dim[1]; j += 1)
+					for (int i = 0; i < dim[0]; i += 1) {
+						switch (datatype) {
+						case 2:// DT_UINT8
+							volume[k][j][i] = bb.get() & 0xFF;
+							break;
+						case 4:// DT_INT16
+							volume[k][j][i] = bb.getShort();
+							break;
+						case 8:// DT_INT32
+							volume[k][j][i] = bb.getInt();
+							break;
+						}
+					}
 			
 			for (int m=0; m<boundingBox.length; m++) {
 				// Get bounding box
-				boundingBox[m][0] = dim[0]; // min i
+				boundingBox[m][0] = dim[0] - 1; // min i
 				boundingBox[m][1] = 0; // max i
-				boundingBox[m][2] = dim[1]; // min j
+				boundingBox[m][2] = dim[1] - 1; // min j
 				boundingBox[m][3] = 0; // max j
-				boundingBox[m][4] = dim[2]; // min k
+				boundingBox[m][4] = dim[2] - 1; // min k
 				boundingBox[m][5] = 0; // max k
 				float val;
 				int rgb;
-				for (int i = 0; i < dim[0]; i += 5) // there's no need to scan all
+				int s = 5;
+				for (int k = 0; k < dim[2]; k += s) // there's no need to scan all
 													// voxels...
-					for (int j = 0; j < dim[1]; j += 5)
-						for (int k = 0; k < dim[2]; k += 5) {
-							val = getValue(i, j, k);
+					for (int j = 0; j < dim[1]; j += s)
+						for (int i = 0; i < dim[0]; i += s) {
+							val = volume[k][j][i];
 							rgb = MyImages.value2rgb((int)val, m);
 							if (rgb > 0) {
 								if (i < boundingBox[m][0])
-									boundingBox[m][0] = i;
+									boundingBox[m][0] = i - s + 1;
 								if (i > boundingBox[m][1])
-									boundingBox[m][1] = i;
+									boundingBox[m][1] = i + s - 1;
 								if (j < boundingBox[m][2])
-									boundingBox[m][2] = j;
+									boundingBox[m][2] = j - s + 1;
 								if (j > boundingBox[m][3])
-									boundingBox[m][3] = j;
+									boundingBox[m][3] = j + s - 1;
 								if (k < boundingBox[m][4])
-									boundingBox[m][4] = k;
+									boundingBox[m][4] = k - s + 1;
 								if (k > boundingBox[m][5])
-									boundingBox[m][5] = k;
+									boundingBox[m][5] = k + s - 1;
 							}
 						}
+				if (boundingBox[m][0] < 0)
+					boundingBox[m][0] = 0;
+				if (boundingBox[m][1] > dim[0] - 1)
+					boundingBox[m][1] = dim[0] - 1;
+				if (boundingBox[m][2] < 0)
+					boundingBox[m][2] = 0;
+				if (boundingBox[m][3] > dim[1] - 1)
+					boundingBox[m][3] = dim[1] - 1;
+				if (boundingBox[m][4] < 0)
+					boundingBox[m][4] = 0;
+				if (boundingBox[m][5] > dim[2] - 1)
+					boundingBox[m][5] = dim[2] - 1;
 			}
 
 		} catch (IOException e) {
@@ -170,29 +202,10 @@ class MyVolume {
 		return err;
 	}
 
-	public float getValue(int i, int j, int k)
+	public int getValue(int i, int j, int k)
 	// get value at voxel with index coordinates i,j,k
 	{
-		ByteBuffer bb = ByteBuffer.wrap(volume);
-		bb.order(BYTE_ORDER);
-		float v = 0;
-		if (i >= dim[0] || j >= dim[1] || k >= dim[2])
-			return v;
-		switch (datatype) {
-		case 2:// DT_UINT8
-			v = bb.get(k * dim[1] * dim[0] + j * dim[0] + i) & 0xFF;
-			break;
-		case 4:// DT_INT16
-			v = bb.getShort(2 * (k * dim[1] * dim[0] + j * dim[0] + i));
-			break;
-		case 8:// DT_INT32
-			v = bb.getInt(4 * (k * dim[1] * dim[0] + j * dim[0] + i));
-			break;
-		case 16:// DT_FLOAT32
-			v = bb.getFloat(4 * (k * dim[1] * dim[0] + j * dim[0] + i));
-			break;
-		}
-		return v;
+		return volume[k][j][i];
 	}
 
 	public MyVolume(String directory, String volName) {
@@ -245,12 +258,12 @@ class MyImages extends JComponent {
 			{ 1, 0, 0 }
 	};
 	private final static float[][] Y = {	// Y-plane transformation matrix
-			{ -1, 0, 0 },
+			{ 1, 0, 0 },
 			{ 0, 0, -1 },
 			{ 0, 1, 0 }
 	};
 	private final static float[][] Z = {	// Z-plane transformation matrix
-			{ -1, 0, 0 },
+			{ 1, 0, 0 },
 			{ 0, -1, 0 },
 			{ 0, 0, 1 }
 	};
@@ -273,15 +286,31 @@ class MyImages extends JComponent {
 		}
 
 		// init segmentation label colourmap
-		int tmp[][] = { { 7, 1, 0, 0 }, // Red: Left-Cerebellum-White-Matter
-				{ 8, 0, 1, 0 }, // Green: Left-Cerebellum-Cortex
-				{ 46, 1, 0, 1 }, // Magenta: Right-Cerebellum-White-Matter
-				{ 47, 0, 1, 1 } }; // Cyan: Right-Cerebellum-Cortex
-		for (i = 0; i < tmp.length; i++) {
-			cmap[1][3 * tmp[i][0] + 0] = tmp[i][1] * 127;
-			cmap[1][3 * tmp[i][0] + 1] = tmp[i][2] * 127;
-			cmap[1][3 * tmp[i][0] + 2] = tmp[i][3] * 127;
-		}
+    	String ColorLUT = "FreeSurferColorLUT.txt";
+        try {
+        	InputStream input = getClass().getResourceAsStream(ColorLUT);
+        	String line;
+        	BufferedReader buffer = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
+        	while ((line = buffer.readLine()) != null) {
+				if (line.startsWith("#"))
+					continue;
+                String[] parts = line.split("\\s+");
+                if (parts.length < 5)
+                	continue;
+                int No = Integer.valueOf(parts[0]);
+                if (No >= 0 && No < 255) {
+                    int R = Integer.valueOf(parts[2]);
+                    int G = Integer.valueOf(parts[3]);
+                    int B = Integer.valueOf(parts[4]);
+                    cmap[1][3 * No + 0] = R;
+                    cmap[1][3 * No + 1] = G;
+                    cmap[1][3 * No + 2] = B;
+                }
+            }
+        } catch (Exception e) {
+            System.out.print("Cannot read file: " + ColorLUT);
+        }
+
 
 		// init image list
 		String tmpList[] = { "brain.m0.2D.X", "brain.m0.2D.Y", "brain.m0.2D.Z", "aseg.m1.2D.X", "aseg.m1.2D.Y",
@@ -333,7 +362,7 @@ class MyImages extends JComponent {
 		this.subjectDir = subjectDir;
 		volumes = new MyVolumes(subjectDir + "/mri");
 		
-		// Set selected slices at the center of the cerebellum
+		// Set selected slices at the center of the segmentation
 		MyVolume vol = volumes.getVolume("aseg");
 		
 		invMat(invS, vol.S);
@@ -343,25 +372,25 @@ class MyImages extends JComponent {
 		tmp[1] = vol.dim[1] - 1;
 		tmp[2] = vol.dim[2] - 1;
 		multMatVec(tmpd, invS, tmp);
-		dim1[0] = (int) tmpd[0];
-		dim1[1] = (int) tmpd[1];
-		dim1[2] = (int) tmpd[2];
+		dim1[0] = Math.round(tmpd[0]);
+		dim1[1] = Math.round(tmpd[1]);
+		dim1[2] = Math.round(tmpd[2]);
 
 		// find bounding box
 		tmp[0] = vol.boundingBox[1][0];
 		tmp[1] = vol.boundingBox[1][2];
 		tmp[2] = vol.boundingBox[1][4];
 		multMatVec(tmpd, invS, tmp);
-		bounds[0][0] = (int) tmpd[0];
-		bounds[1][0] = (int) tmpd[1];
-		bounds[2][0] = (int) tmpd[2];
+		bounds[0][0] = Math.round(tmpd[0]);
+		bounds[1][0] = Math.round(tmpd[1]);
+		bounds[2][0] = Math.round(tmpd[2]);
 		tmp[0] = vol.boundingBox[1][1];
 		tmp[1] = vol.boundingBox[1][3];
 		tmp[2] = vol.boundingBox[1][5];
 		multMatVec(tmpd, invS, tmp);
-		bounds[0][1] = (int) tmpd[0];
-		bounds[1][1] = (int) tmpd[1];
-		bounds[2][1] = (int) tmpd[2];
+		bounds[0][1] = Math.round(tmpd[0]);
+		bounds[1][1] = Math.round(tmpd[1]);
+		bounds[2][1] = Math.round(tmpd[2]);
 		
 		selectedSlice[0] = ((bounds[0][0] + bounds[0][1]) / 2 - Math.min(dim1[0], 0)) / (float) Math.abs(dim1[0]);
 		selectedSlice[1] = ((bounds[1][0] + bounds[1][1]) / 2 - Math.min(dim1[1], 0)) / (float) Math.abs(dim1[1]);
@@ -521,14 +550,14 @@ class MyImages extends JComponent {
 		int rgb = 0;
 		int r, g, b;
 
-		try {
+//		try {
 			r = cmap[cmapindex][3 * v + 0];
 			g = cmap[cmapindex][3 * v + 1];
 			b = cmap[cmapindex][3 * v + 2];
 			rgb = r << 16 | g << 8 | b;
-		} catch (Exception e) {
-			System.out.println("missing label:" + v);
-		}
+//		} catch (Exception e) {
+//			System.out.println("missing label:" + v);
+//		}
 
 		return rgb;
 	}
@@ -576,9 +605,9 @@ class MyImages extends JComponent {
 		tmp[1] = vol.dim[1] - 1;
 		tmp[2] = vol.dim[2] - 1;
 		multMatVec(tmpd, T, tmp);
-		dim1[0] = (int) tmpd[0];
-		dim1[1] = (int) tmpd[1];
-		dim1[2] = (int) tmpd[2];
+		dim1[0] = Math.round(tmpd[0]);
+		dim1[1] = Math.round(tmpd[1]);
+		dim1[2] = Math.round(tmpd[2]);
 
 		// find dimension of pixels
 		tmp[0] = vol.pixdim[0];
@@ -594,14 +623,14 @@ class MyImages extends JComponent {
 		tmp[1] = vol.boundingBox[cmapindex][2];
 		tmp[2] = vol.boundingBox[cmapindex][4];
 		multMatVec(tmpd, T, tmp);
-		bounds[0][0] = (int) tmpd[0];
-		bounds[1][0] = (int) tmpd[1];
+		bounds[0][0] = Math.round(tmpd[0]);
+		bounds[1][0] = Math.round(tmpd[1]);
 		tmp[0] = vol.boundingBox[cmapindex][1];
 		tmp[1] = vol.boundingBox[cmapindex][3];
 		tmp[2] = vol.boundingBox[cmapindex][5];
 		multMatVec(tmpd, T, tmp);
-		bounds[0][1] = (int) tmpd[0];
-		bounds[1][1] = (int) tmpd[1];
+		bounds[0][1] = Math.round(tmpd[0]);
+		bounds[1][1] = Math.round(tmpd[1]);
 
 		rect.x = Math.min(bounds[0][0], bounds[0][1]);
 		rect.y = Math.min(bounds[1][0], bounds[1][1]);
@@ -614,7 +643,7 @@ class MyImages extends JComponent {
 		tmp[2] = selectedSlice[2];
 		multMatVec(tmpd, P, selectedSlice);
 		slice = Math.abs(tmpd[2]);
-		z = (int) (slice * Math.abs(dim1[2])) + Math.min(dim1[2], 0);
+		z = Math.round((slice * Math.abs(dim1[2])) + Math.min(dim1[2], 0));
 
 		// find maximum brightness
 		for (x = rect.x; x < rect.width + rect.x; x++)
@@ -623,11 +652,11 @@ class MyImages extends JComponent {
 				tmp[1] = y;
 				tmp[2] = z;
 				multMatVec(tmpx, invT, tmp);
-				x1 = (int) tmpx[0];
-				y1 = (int) tmpx[1];
-				z1 = (int) tmpx[2];
+				x1 = Math.round(tmpx[0]);
+				y1 = Math.round(tmpx[1]);
+				z1 = Math.round(tmpx[2]);
 				
-				v = (int) vol.getValue(x1, y1, z1);
+				v = Math.round(vol.getValue(x1, y1, z1));
 				if (v > sliceMax)
 					sliceMax = v;
 			}
@@ -640,11 +669,11 @@ class MyImages extends JComponent {
 				tmp[1] = y + rect.y;
 				tmp[2] = z;
 				multMatVec(tmpx, invT, tmp);
-				x1 = (int) tmpx[0];
-				y1 = (int) tmpx[1];
-				z1 = (int) tmpx[2];
+				x1 = Math.round(tmpx[0]);
+				y1 = Math.round(tmpx[1]);
+				z1 = Math.round(tmpx[2]);
 
-				v = (int) (vol.getValue(x1, y1, z1));
+				v = Math.round(vol.getValue(x1, y1, z1));
 				if (cmapindex == 0)
 					rgb = value2rgb((int) (v * 255.0 / sliceMax), cmapindex);
 				else
@@ -706,9 +735,9 @@ class MyImages extends JComponent {
 		tmp[1] = volBack.dim[1] - 1;
 		tmp[2] = volBack.dim[2] - 1;
 		multMatVec(tmpd, T, tmp);
-		dim1[0] = (int) tmpd[0];
-		dim1[1] = (int) tmpd[1];
-		dim1[2] = (int) tmpd[2];
+		dim1[0] = Math.round(tmpd[0]);
+		dim1[1] = Math.round(tmpd[1]);
+		dim1[2] = Math.round(tmpd[2]);
 
 		tmp[0] = vol.pixdim[0];
 		tmp[1] = vol.pixdim[1];
@@ -723,14 +752,14 @@ class MyImages extends JComponent {
 		tmp[1] = volBack.boundingBox[0][2];
 		tmp[2] = volBack.boundingBox[0][4];
 		multMatVec(tmpd, T, tmp);
-		bounds[0][0] = (int) tmpd[0];
-		bounds[1][0] = (int) tmpd[1];
+		bounds[0][0] = Math.round(tmpd[0]);
+		bounds[1][0] = Math.round(tmpd[1]);
 		tmp[0] = volBack.boundingBox[0][1];
 		tmp[1] = volBack.boundingBox[0][3];
 		tmp[2] = volBack.boundingBox[0][5];
 		multMatVec(tmpd, T, tmp);
-		bounds[0][1] = (int) tmpd[0];
-		bounds[1][1] = (int) tmpd[1];
+		bounds[0][1] = Math.round(tmpd[0]);
+		bounds[1][1] = Math.round(tmpd[1]);
 
 		rect.x = Math.min(bounds[0][0], bounds[0][1]);
 		rect.y = Math.min(bounds[1][0], bounds[1][1]);
@@ -743,7 +772,7 @@ class MyImages extends JComponent {
 		tmp[2] = selectedSlice[2];
 		multMatVec(tmpd, P, selectedSlice);
 		slice = Math.abs(tmpd[2]);
-		z = (int) (slice * Math.abs(dim1[2])) + Math.min(dim1[2], 0);
+		z = Math.round(slice * Math.abs(dim1[2])) + Math.min(dim1[2], 0);
 
 		// find maximum brightness
 		for (x = rect.x; x < rect.width + rect.x; x++)
@@ -752,11 +781,11 @@ class MyImages extends JComponent {
 				tmp[1] = y;
 				tmp[2] = z;
 				multMatVec(tmpx, invT, tmp);
-				x1 = (int) tmpx[0];
-				y1 = (int) tmpx[1];
-				z1 = (int) tmpx[2];
+				x1 = Math.round(tmpx[0]);
+				y1 = Math.round(tmpx[1]);
+				z1 = Math.round(tmpx[2]);
 
-				v = (int) volBack.getValue(x1, y1, z1);
+				v = Math.round(volBack.getValue(x1, y1, z1));
 				if (v > sliceMax)
 					sliceMax = v;
 			}
@@ -769,14 +798,14 @@ class MyImages extends JComponent {
 				tmp[1] = y + rect.y;
 				tmp[2] = z;
 				multMatVec(tmpx, invT, tmp);
-				x1 = (int) tmpx[0];
-				y1 = (int) tmpx[1];
-				z1 = (int) tmpx[2];
+				x1 = Math.round(tmpx[0]);
+				y1 = Math.round(tmpx[1]);
+				z1 = Math.round(tmpx[2]);
 
-				v = (int) (vol.getValue(x1, y1, z1));
-				v0 = (int) (volBack.getValue(x1, y1, z1));
+				v = Math.round(vol.getValue(x1, y1, z1));
+				v0 = Math.round(volBack.getValue(x1, y1, z1));
 				rgb = value2rgb(v, cmapindex);
-				rgb0 = value2rgb((int) (v0 * 255.0 / sliceMax), 0);
+				rgb0 = value2rgb((int) Math.round(v0 * 255.0 / sliceMax), 0);
 				if (rgb > 0 && toggle)
 					theImg.setRGB(x, y, rgb);
 				else
@@ -796,7 +825,7 @@ class MyImages extends JComponent {
 	private BufferedImage drawVolume(MyVolume vol, int plane, int cmapindex) throws Exception {
 		BufferedImage theImg;
 		int x, y, z, x1, y1, z1, rgb;
-		float s0, s1;
+		int s0, s1;
 		int v;
 		float[][] P, invP = new float[3][3];
 		float[][] T = new float[3][3], invT = new float[3][3];
@@ -838,16 +867,16 @@ class MyImages extends JComponent {
 		tmp[1] = vol.boundingBox[cmapindex][2];
 		tmp[2] = vol.boundingBox[cmapindex][4];
 		multMatVec(tmpd, T, tmp);
-		bounds[0][0] = (int) tmpd[0];
-		bounds[1][0] = (int) tmpd[1];
-		bounds[2][0] = (int) tmpd[2];
+		bounds[0][0] = Math.round(tmpd[0]);
+		bounds[1][0] = Math.round(tmpd[1]);
+		bounds[2][0] = Math.round(tmpd[2]);
 		tmp[0] = vol.boundingBox[cmapindex][1];
 		tmp[1] = vol.boundingBox[cmapindex][3];
 		tmp[2] = vol.boundingBox[cmapindex][5];
 		multMatVec(tmpd, T, tmp);
-		bounds[0][1] = (int) tmpd[0];
-		bounds[1][1] = (int) tmpd[1];
-		bounds[2][1] = (int) tmpd[2];
+		bounds[0][1] = Math.round(tmpd[0]);
+		bounds[1][1] = Math.round(tmpd[1]);
+		bounds[2][1] = Math.round(tmpd[2]);
 
 		rect.x = Math.min(bounds[0][0], bounds[0][1]);
 		rect.y = Math.min(bounds[1][0], bounds[1][1]);
@@ -859,18 +888,18 @@ class MyImages extends JComponent {
 
 		// draw volume
 		theImg = new BufferedImage(rect.width, rect.height, BufferedImage.TYPE_INT_RGB);
-		for (z = (int) s0; z <= s1; z++)
+		for (z = s0; z <= s1; z++)
 			for (x = 0; x < rect.width; x++)
 				for (y = 0; y < rect.height; y++) {
 					tmp[0] = x + rect.x;
 					tmp[1] = y + rect.y;
 					tmp[2] = z;
 					multMatVec(tmpx, invT, tmp);
-					x1 = (int) tmpx[0];
-					y1 = (int) tmpx[1];
-					z1 = (int) tmpx[2];
+					x1 = Math.round(tmpx[0]);
+					y1 = Math.round(tmpx[1]);
+					z1 = Math.round(tmpx[2]);
 
-					v = (int) vol.getValue(x1, y1, z1);
+					v = Math.round(vol.getValue(x1, y1, z1));
 					rgb = value2rgb(v, cmapindex); // if(rgb==0)
 													// System.out.println("missing
 													// label:"+v);
@@ -1110,8 +1139,8 @@ class MyImages extends JComponent {
 
 class MyGraphs extends JComponent {
 	private static final long serialVersionUID = 1L;
-	static final int NB_REGIONS = 6; // The number of brain regions
-	static final String regions[] = { "ICV", "BS", "LCW", "RCW", "LCC", "RCC" };
+	static final int NB_REGIONS = 5; // The number of brain regions
+	static final String regions[] = { "ICV", "BS", "GM", "WM", "Cbl" };
 
 	private double mean[] = new double[NB_REGIONS];
 	private double std[] = new double[NB_REGIONS];
@@ -1121,7 +1150,7 @@ class MyGraphs extends JComponent {
 	public void paint(Graphics g) {
 		Graphics2D g2 = (Graphics2D) g;
 		float val;
-		int i, x[] = new int[17];
+		int i, x[] = new int[NB_REGIONS+1];
 		Dimension dim = this.getSize();
 		Stroke dashed = new BasicStroke(1.0f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 5.0f, new float[] { 5.0f },
 				0.0f);
@@ -1187,20 +1216,25 @@ class MyGraphs extends JComponent {
 		int err = 0;
 		for (i = 0; i < x.length; i++)
 			x[i] = 0;
-
+		
 		try {
 			input = new BufferedReader(new FileReader(subjectsDir + "/" + subject + "/stats/aseg.stats"));
 			String line;
 			String[] parts;
+			float[] y = new float[4];
 			while ((line = input.readLine()) != null) {
 				if (line.startsWith("#")) {
 					// Load ICV and BrainSeg data
 					if (line.startsWith("# Measure")) {
 						parts = line.substring(10).trim().split(", ");
-						if ((parts[0].equals("BrainSeg") || parts[0].equals("SupraTentorial")) && parts[4].equals("mm^3"))
-							x[1] = Float.valueOf(parts[3]);
 						if ((parts[0].equals("EstimatedTotalIntraCranialVol") || parts[0].equals("IntraCranialVol")) && parts[4].equals("mm^3"))
 							x[0] = Float.valueOf(parts[3]);
+						if ((parts[0].equals("BrainSeg")) && parts[4].equals("mm^3"))
+							x[1] = Float.valueOf(parts[3]);
+						if ((parts[0].equals("Cortex")) && parts[4].equals("mm^3"))
+							x[2] = Float.valueOf(parts[3]);
+						if ((parts[0].equals("CorticalWhiteMatter")) && parts[4].equals("mm^3"))
+							x[3] = Float.valueOf(parts[3]);
 					}
 				}
 				// Load Cerebellum data
@@ -1208,20 +1242,21 @@ class MyGraphs extends JComponent {
 					parts = line.trim().split(" +");
 					switch (parts[4]) {
 					case "Left-Cerebellum-White-Matter":
-						x[2] = Float.valueOf(parts[3]);
+						y[0] = Float.valueOf(parts[3]);
 						break;
 					case "Right-Cerebellum-White-Matter":
-						x[3] = Float.valueOf(parts[3]);
+						y[1] = Float.valueOf(parts[3]);
 						break;
 					case "Left-Cerebellum-Cortex":
-						x[4] = Float.valueOf(parts[3]);
+						y[2] = Float.valueOf(parts[3]);
 						break;
 					case "Right-Cerebellum-Cortex":
-						x[5] = Float.valueOf(parts[3]);
+						y[3] = Float.valueOf(parts[3]);
 						break;
 					}
 				}
 			}
+			x[4] = y[0] + y[1] + y[2] + y[3];
 			input.close();
 		} catch (IOException e) {
 			err = 1;
@@ -1261,7 +1296,7 @@ class MyGraphs extends JComponent {
 		for (j = 0; j < NB_REGIONS; j++) {
 			mean[j] = s1[j] / s0;
 			std[j] = Math.sqrt((s0 * s2[j] - s1[j] * s1[j]) / (s0 * (s0 - 1)));
-			System.out.println(regions[j] + ":\t" + mean[j] + " ± " + std[j]);
+			System.out.println(regions[j] + ":\t" + mean[j] + " +- " + std[j]);
 		}
 	}
 
@@ -1354,7 +1389,7 @@ public class QCApp {
 
 			row = new Vector<Object>();
 			row.add(n);
-			row.add(1);
+			row.add(0);
 			row.add(subject);
 			row.add("");
 			model.addRow(row);
@@ -1376,28 +1411,35 @@ public class QCApp {
 			try {
 				input = new BufferedReader(new FileReader(f));
 				input.readLine(); // skip header row
-
-				for (i = 0; i < model.getRowCount(); i++) {
-					System.out.println(i);
-					line = input.readLine();
-					j = line.indexOf("\t");
-					k = line.indexOf("\t", j + 1);
-					l = line.indexOf("\t", k + 1);
-					sub = line.substring(0, j);
-					qc = Integer.parseInt(line.substring(j + 1, k));
-					comment = line.substring(k + 1, l);
-					if (!sub.equals(model.getValueAt(i, 2).toString())) {
-						System.out.println("ERROR: qc.txt file does not match current Subjects directory [" + sub
-								+ " vs. " + model.getValueAt(i, 2).toString() + "]");
-						printStatusMessage("ERROR: qc.txt file does not match current Subjects directory");
-						input.close();
-						return;
+				
+				while ((line = input.readLine()) != null) {
+					try {
+						j = line.indexOf("\t");
+						k = line.indexOf("\t", j + 1);
+						l = line.indexOf("\t", k + 1);
+						sub = line.substring(0, j);
+						qc = Integer.parseInt(line.substring(j + 1, k));
+						comment = line.substring(k + 1, l);
+						
+					    for (i = model.getRowCount() - 1; i >= 0; --i)
+				            if (sub.equals(model.getValueAt(i, 2).toString()))
+				                // what if value is not unique?
+				                break;
+						
+						if (i < 0) {
+							System.out.println("Warning: qc.txt subject " + sub + " not found in subjects directory.");
+							printStatusMessage("Warning: qc.txt subject " + sub + " not found in subjects directory.");
+							continue;
+						}
+						model.setValueAt(qc, i, 1);
+						model.setValueAt(comment, i, 3);
+					} catch (Exception e) {
+						e.printStackTrace();
 					}
-					model.setValueAt(qc, i, 1);
-					model.setValueAt(comment, i, 3);
 				}
 				input.close();
 			} catch (Exception e) {
+				e.printStackTrace();
 			}
 		}
 
@@ -1456,6 +1498,7 @@ public class QCApp {
 			}
 			output.close();
 		} catch (IOException e) {
+			e.printStackTrace();
 		}
 		printStatusMessage("QC file saved.");
 	}
