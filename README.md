@@ -6,6 +6,7 @@ The application does not rely on any external library or package (good for peopl
 ![Screenshot](/images/QCAPP.png)
 
 How to use it:
+
 1. First choose the directory with your subject data.
 2. The application puts the list of subjects in the Table to the left. Internally, it also reads the text files with the segmentation results and computes the sample mean and std for each structure.
 3. When you click on a subject in the list, it loads the skull-stripped volume, the grey/white/CSF segmentation, and the subcortical segmentation (in pseudo 3D: just a stack of slices and some shading). If there's no "qc" directory inside the subject's directory, QCApp will create one and save sagittal, coronal and axial slice PNG images for the 3 types of volume. If the "qc" directory is already present, QCApp will just display the PNGs (which is faster than having to make them from the .nii.gz volumes). Once the PNG images are all computed, browsing through the subjects it's very quick using the table, as you don't have open each of the subjects data volume one by one from the File menu. This should help people to QC their data rapidly.
